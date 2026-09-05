@@ -1,0 +1,8 @@
+SuperWASP_tile000006_wget.bat
+SuperWASP_tile000012_wget.bat
+SuperWASP_tile000018_wget.bat
+SuperWASP_tile000024_wget.bat
+SuperWASP_tile000030_wget.bat
+SuperWASP_tile000036_wget.bat
+SuperWASP_tile000042_wget.bat
+SuperWASP_tile000048_wget.bat

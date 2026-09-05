@@ -22,6 +22,8 @@ warnings.filterwarnings('ignore', category=UserWarning)
 RESULTS_DIR = "wasp_candidates_results"
 PLOTS_SUBDIR = os.path.join(RESULTS_DIR, "plots")
 CANDIDATES_CSV = os.path.join(RESULTS_DIR, "candidates.csv")
+COMPLETED_TILES_FILE = os.path.join(RESULTS_DIR, "completed_tiles.txt")
+PROCESSED_STARS_FILE = os.path.join(RESULTS_DIR, "processed_stars.log")
 LOCAL_WASP_DIR = "SuperWASP_data"
 SDE_THRESHOLD = 8.0
 WGET_SCRIPTS_DIR = "/home/wes/scripts/astronomy/SuperWASP_wget"
@@ -30,22 +32,31 @@ WGET_SCRIPTS_DIR = "/home/wes/scripts/astronomy/SuperWASP_wget"
 # --- Main WASP Survey and Worker Functions ---
 #==============================================================================
 
-def process_wget_script(wget_script_path, limit=None):
+def process_wget_script(wget_script_path, processed_stars=None, limit=None):
     """
     Downloads and processes data from a wget script line by line.
     A limit can be set on the number of FITS files to process.
+    Returns True if the entire script was processed (no limit reached), False otherwise.
     """
-    print(f"\n--- Processing wget script: {os.path.basename(wget_script_path)} ---")
+    script_name = os.path.basename(wget_script_path)
+    print(f"\n--- Processing wget script: {script_name} ---")
     os.makedirs(LOCAL_WASP_DIR, exist_ok=True)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    if processed_stars is None:
+        processed_stars = set()
 
     with open(wget_script_path, 'r') as f:
         lines = f.readlines()
 
     i = 0
     fits_processed_count = 0
+    reached_limit = False
+
     while i < len(lines):
         if limit is not None and fits_processed_count >= limit:
             print(f"Reached processing limit of {limit} files.")
+            reached_limit = True
             break
 
         line = lines[i].strip()
@@ -53,7 +64,6 @@ def process_wget_script(wget_script_path, limit=None):
         if not line.startswith('wget') or '.fits' not in line:
             continue
 
-        fits_processed_count += 1
         fits_line = line
         tbl_line = None
         if i < len(lines) and 'wget' in lines[i] and '_lc.tbl' in lines[i]:
@@ -73,18 +83,11 @@ def process_wget_script(wget_script_path, limit=None):
             if tbl_match:
                 tbl_filename = tbl_match.group(1)
 
-        processed_files = set()
-        if os.path.isfile(CANDIDATES_CSV):
-            try:
-                processed_df = pd.read_csv(CANDIDATES_CSV)
-                if 'obj_name' in processed_df.columns:
-                    processed_files = set(processed_df['obj_name'].dropna().unique())
-            except pd.errors.EmptyDataError:
-                pass
-
-        if wasp_id in processed_files:
-            print(f"  -> Skipping {wasp_id} (already processed).")
+        # Fast in-memory skip check
+        if wasp_id in processed_stars:
             continue
+
+        fits_processed_count += 1
 
         try:
             print(f"  -> Downloading and processing {wasp_id} ({fits_processed_count}/{limit or 'all'})...")
@@ -100,10 +103,15 @@ def process_wget_script(wget_script_path, limit=None):
                 candidate_df = pd.DataFrame([candidate_data])
                 file_exists = os.path.isfile(CANDIDATES_CSV)
                 candidate_df.to_csv(CANDIDATES_CSV, mode='a', header=not file_exists, index=False)
-                print(f"  -> Found candidate in {wasp_id}")
+                print(f"  -> Found candidate in {wasp_id} (SDE={candidate_data['sde']:.2f})")
 
                 # Save plots
                 utils.save_plots(PLOTS_SUBDIR, candidate_data, processed_lc, bls_model)
+
+            # Record star as processed (both in memory and persistent log)
+            processed_stars.add(wasp_id)
+            with open(PROCESSED_STARS_FILE, 'a') as pf:
+                pf.write(f"{wasp_id}\n")
 
         except subprocess.CalledProcessError as e:
             print(f"  !!! Download failed for {wasp_id}: {e} !!!")
@@ -119,6 +127,8 @@ def process_wget_script(wget_script_path, limit=None):
                 tbl_filepath = os.path.join(LOCAL_WASP_DIR, tbl_filename)
                 if os.path.exists(tbl_filepath):
                     os.remove(tbl_filepath)
+
+    return not reached_limit
 
 def process_local_wasp_star(args):
     """
@@ -137,13 +147,7 @@ def process_local_wasp_star(args):
             # Time for each observation is in the 'TMID' column, in seconds from JD_REF.
             time_seconds = data['TMID']
 
-            # --- START: MODIFIED CODE ---
-            #
             # Convert seconds to days and add to the reference Julian Date.
-            # This creates a simple NumPy array of JD values. This is a more robust
-            # way to create the time series for Lightkurve, avoiding potential
-            # object type issues with Time/TimeDelta in downstream functions.
-            # 86400 seconds in a day.
             time_jd = jd_ref + (time_seconds / 86400.0)
 
             # Extract flux and normalize
@@ -151,10 +155,7 @@ def process_local_wasp_star(args):
             normalized_flux = flux / np.median(flux)
 
             # Create LightCurve object using the JD numpy array.
-            # Lightkurve understands JD as the default time format.
             lc = lk.LightCurve(time=time_jd, flux=normalized_flux)
-            #
-            # --- END: MODIFIED CODE ---
 
         if len(lc) == 0:
             return None
@@ -166,18 +167,56 @@ def process_local_wasp_star(args):
         print(f"  !!! Error processing {wasp_id}: {e} !!!")
         return None
 
-def process_all_wget_scripts():
+def process_all_wget_scripts(script_limit=None, file_limit=None):
+    os.makedirs(RESULTS_DIR, exist_ok=True)
     all_wget_scripts = sorted(glob.glob(os.path.join(WGET_SCRIPTS_DIR, "*.bat")))
     if not all_wget_scripts:
         print(f"No wget scripts found in {WGET_SCRIPTS_DIR}")
-    else:
-        print(f"Found {len(all_wget_scripts)} wget scripts to process.")
+        return
+
+    # Load completed tiles
+    completed_tiles = set()
+    if os.path.isfile(COMPLETED_TILES_FILE):
+        with open(COMPLETED_TILES_FILE, 'r') as f:
+            completed_tiles = {line.strip() for line in f if line.strip()}
+        print(f"Loaded {len(completed_tiles)} completed tile scripts to skip.")
+
+    # Load processed stars
+    processed_stars = set()
+    if os.path.isfile(PROCESSED_STARS_FILE):
+        with open(PROCESSED_STARS_FILE, 'r') as f:
+            processed_stars = {line.strip() for line in f if line.strip()}
+        print(f"Loaded {len(processed_stars)} previously processed stars.")
+
+    # Also load from candidates.csv if available
+    if os.path.isfile(CANDIDATES_CSV):
         try:
-            for script_path in all_wget_scripts:
-                process_wget_script(script_path)
-        except KeyboardInterrupt:
-            print("\n\nProcess interrupted by user. Exiting.")
-            sys.exit(0)
+            candidates_df = pd.read_csv(CANDIDATES_CSV)
+            if 'obj_name' in candidates_df.columns:
+                cand_stars = set(candidates_df['obj_name'].dropna().unique())
+                processed_stars.update(cand_stars)
+        except Exception:
+            pass
+
+    print(f"Found {len(all_wget_scripts)} total wget scripts.")
+    scripts_to_process = [s for s in all_wget_scripts if os.path.basename(s) not in completed_tiles]
+    print(f"{len(scripts_to_process)} scripts remaining to process.")
+
+    if script_limit is not None:
+        scripts_to_process = scripts_to_process[:script_limit]
+
+    try:
+        for script_path in scripts_to_process:
+            script_name = os.path.basename(script_path)
+            tile_completed = process_wget_script(script_path, processed_stars=processed_stars, limit=file_limit)
+            if tile_completed and file_limit is None:
+                completed_tiles.add(script_name)
+                with open(COMPLETED_TILES_FILE, 'a') as f:
+                    f.write(f"{script_name}\n")
+                print(f"✓ Tile {script_name} fully completed and logged.")
+    except KeyboardInterrupt:
+        print("\n\nProcess interrupted by user. Exiting.")
+        sys.exit(0)
 
 
 #==============================================================================
