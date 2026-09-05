@@ -45,3 +45,8 @@ processed_log.txt
 scripts_backup*/
 folder.txt
 results_*.txt
+
+# Local Agent / AI Memory (keep private, do not push to GitHub)
+AGENTS.md
+GEMINI.md
+.agents/
