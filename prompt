@@ -1,0 +1,28 @@
+We were working on processing WASP data. We have a script started, a menu to choose the type of data to process @main.py,
+  then @wasp_survey.py to process the data we download. The downloaded data was too much to process. Let's continue trying
+  to process this data. We had an old way that would try to download the data as needed but that resulted in 404 errors. In
+  @SuperWASP_wget/ are the scripts to download the data using wget with the downloads going into @SuperWASP_data/. We can
+  only download from one file at a time due space; or, we can go back to the method to download and process the data in
+  realtime and use wget instead of https to obtain the data.
+
+
+
+  --- Processing wget script: SuperWASP_tile000006_wget.bat ---                                                              │
+ │      -> Downloading and processing 1SWASP J000000.76-824501.0 (1/5)...                                                        │
+ │      -> Trying frequency_factor=500...                                                                                        │
+ │      >>> FOUND CANDIDATE in 1SWASP J000000.76-824501.0 with SDE=1998.32! <<<                                                  │
+ │      -> Found candidate in 1SWASP J000000.76-824501.0                                                                         │
+ │      -> Downloading and processing 1SWASP J000001.47-820153.6 (2/5)...                                                        │
+ │      -> Trying frequency_factor=500...                                                                                        │
+ │      >>> FOUND CANDIDATE in 1SWASP J000001.47-820153.6 with SDE=250.78! <<<                                                   │
+ │      -> Found candidate in 1SWASP J000001.47-820153.6                                                                         │
+ │      -> Downloading and processing 1SWASP J000004.04-831137.4 (3/5)...                                                        │
+ │      -> Trying frequency_factor=500...                                                                                        │
+ │      >>> FOUND CANDIDATE in 1SWASP J000004.04-831137.4 with SDE=129.60! <<<                                                   │
+ │      -> Found candidate in 1SWASP J000004.04-831137.4                                                                         │
+ │      -> Downloading and processing 1SWASP J000007.26-822422.2 (4/5)...                                                        │
+ │      -> Trying frequency_factor=500...                                                                                        │
+ │      -> Downloading and processing 1SWASP J000007.70-812644.1 (5/5)...                                                        │
+ │      -> Trying frequency_factor=500...                                                                                        │
+ │      !!! Error processing 1SWASP J000007.70-812644.1: The maximum transit duration must be shorter than the                   │
+ │    minimum period !!!

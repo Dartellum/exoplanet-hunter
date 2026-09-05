@@ -1,0 +1,35 @@
+
+echo "TIC 100617302"
+awk -F, '$1 == "100617302"' TIC_CATALOG/* > results_100617302.txt
+awk -F, '$1 == "101258556"' TIC_CATALOG/* > results_01258556.txt
+awk -F, '$1 == "128791197"' TIC_CATALOG/* > results_28791197.txt
+awk -F, '$1 == "13919679"' TIC_CATALOG/* > results_13919679.txt
+awk -F, '$1 == "144436080"' TIC_CATALOG/* > results_144436080.txt
+awk -F, '$1 == "150269579"' TIC_CATALOG/* > results_150269579.txt
+awk -F, '$1 == "150651495"' TIC_CATALOG/* > results_150651495.txt
+awk -F, '$1 == "156067195"' TIC_CATALOG/* > results_156067195.txt
+awk -F, '$1 == "167487503"' TIC_CATALOG/* > results_167487503.txt
+awk -F, '$1 == "16879111"' TIC_CATALOG/* > results_16879111.txt
+awk -F, '$1 == "189792420"' TIC_CATALOG/* > results_189792420.txt
+awk -F, '$1 == "200644937"' TIC_CATALOG/* > results_200644937.txt
+awk -F, '$1 == "204721829"' TIC_CATALOG/* > results_204721829.txt
+awk -F, '$1 == "209429745"' TIC_CATALOG/* > results_209429745.txt
+awk -F, '$1 == "21042633"' TIC_CATALOG/* > results_21042633.txt
+awk -F, '$1 == "238750043"' TIC_CATALOG/* > results_238750043.txt
+awk -F, '$1 == "239067045"' TIC_CATALOG/* > results_239067045.txt
+awk -F, '$1 == "265337716"' TIC_CATALOG/* > results_265337716.txt
+awk -F, '$1 == "265468126"' TIC_CATALOG/* > results_265468126.txt
+awk -F, '$1 == "282782590"' TIC_CATALOG/* > results_282782590.txt
+awk -F, '$1 == "361557261"' TIC_CATALOG/* > results_361557261.txt
+awk -F, '$1 == "373634783"' TIC_CATALOG/* > results_373634783.txt
+awk -F, '$1 == "37605833"' TIC_CATALOG/* > results_37605833.txt
+awk -F, '$1 == "383467590"' TIC_CATALOG/* > results_383467590.txt
+awk -F, '$1 == "383667729"' TIC_CATALOG/* > results_383667729.txt
+awk -F, '$1 == "39927704"' TIC_CATALOG/* > results_39927704.txt
+awk -F, '$1 == "422890004"' TIC_CATALOG/* > results_422890004.txt
+awk -F, '$1 == "423397215"' TIC_CATALOG/* > results_423397215.txt
+awk -F, '$1 == "437338174"' TIC_CATALOG/* > results_437338174.txt
+awk -F, '$1 == "439412823"' TIC_CATALOG/* > results_439412823.txt
+#awk -F, '$1 == "5774131"' TIC_CATALOG/* > results_5774131.txt
+awk -F, '$1 == "776848"' TIC_CATALOG/* > results_776848.txt
+awk -F, '$1 == "92242479"' TIC_CATALOG/* > results_92242479.txt

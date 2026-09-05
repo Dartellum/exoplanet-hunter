@@ -1,0 +1,47 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment & Dependencies
+.venv/
+venv/
+env/
+ENV/
+node_modules/
+.npm/
+
+# Massive Catalogs & Databases (>1 Terabyte)
+TIC_CATALOG/
+*.duckdb
+*.db
+*.sqlite
+*.sqlite3
+temp_duckdb_parts/
+
+# Raw Survey Archives & Heavy Data
+SuperWASP_data/
+SuperWASP_wget/
+Kelt/
+*.fits
+*.tbl
+*.ods
+wasp_target_list.txt
+
+# Caches, Diagnostic Plots & Heavy Logs
+cache/
+*/cache/
+plots/
+*/plots/
+*.png
+*.jpg
+*.jpeg
+*.log
+processed_log.txt
+*/processed_log.txt
+
+# Script backups & system dumps
+scripts_backup*/
+folder.txt
+results_*.txt
