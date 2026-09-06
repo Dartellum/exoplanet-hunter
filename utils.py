@@ -22,8 +22,8 @@ def run_bls_analysis(light_curve, object_id, display_name, sde_threshold):
             print(f"  -> Downsampling {display_name} to reduce grid size...")
             processed_lc = processed_lc.bin(time_bin_size=0.01)
 
-        periods = np.linspace(0.5, 20.0, 100_000)
-        durations = np.linspace(0.01, 0.1, 10)
+        periods = np.linspace(0.5, 20.0, 30_000)
+        durations = np.array([0.02, 0.05, 0.08, 0.12])
 
         bls_model = processed_lc.to_periodogram(method='bls', period=periods, duration=durations)
 

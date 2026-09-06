@@ -12,6 +12,8 @@ import sys
 import utils
 import numpy as np
 from astropy.time import Time, TimeDelta
+import itertools
+import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # --- Suppress Warnings ---
@@ -26,109 +28,37 @@ COMPLETED_TILES_FILE = os.path.join(RESULTS_DIR, "completed_tiles.txt")
 PROCESSED_STARS_FILE = os.path.join(RESULTS_DIR, "processed_stars.log")
 LOCAL_WASP_DIR = "SuperWASP_data"
 SDE_THRESHOLD = 8.0
+NUM_WORKERS = 8
 WGET_SCRIPTS_DIR = "/home/wes/scripts/astronomy/SuperWASP_wget"
 
 #==============================================================================
 # --- Main WASP Survey and Worker Functions ---
 #==============================================================================
 
-def process_wget_script(wget_script_path, processed_stars=None, limit=None):
+def apply_system_protections():
     """
-    Downloads and processes data from a wget script line by line.
-    A limit can be set on the number of FITS files to process.
-    Returns True if the entire script was processed (no limit reached), False otherwise.
+    Guarantees Technitium DNS and Jellyfin run with zero performance impact:
+    1. Sets CPU nice level to 19 (lowest CPU priority).
+    2. Pins WASP process to cores 8-31 (reserving cores 0-7 exclusively for DNS/Jellyfin/OS).
+    3. Sets disk I/O scheduling to Idle priority (ionice class 3).
     """
-    script_name = os.path.basename(wget_script_path)
-    print(f"\n--- Processing wget script: {script_name} ---")
-    os.makedirs(LOCAL_WASP_DIR, exist_ok=True)
-    os.makedirs(RESULTS_DIR, exist_ok=True)
+    try:
+        os.nice(19)
+    except Exception:
+        pass
 
-    if processed_stars is None:
-        processed_stars = set()
+    try:
+        total_cores = os.cpu_count() or 32
+        if total_cores > 8:
+            safe_cores = set(range(8, total_cores))
+            os.sched_setaffinity(0, safe_cores)
+    except Exception:
+        pass
 
-    with open(wget_script_path, 'r') as f:
-        lines = f.readlines()
-
-    i = 0
-    fits_processed_count = 0
-    reached_limit = False
-
-    while i < len(lines):
-        if limit is not None and fits_processed_count >= limit:
-            print(f"Reached processing limit of {limit} files.")
-            reached_limit = True
-            break
-
-        line = lines[i].strip()
-        i += 1
-        if not line.startswith('wget') or '.fits' not in line:
-            continue
-
-        fits_line = line
-        tbl_line = None
-        if i < len(lines) and 'wget' in lines[i] and '_lc.tbl' in lines[i]:
-            tbl_line = lines[i].strip()
-            i += 1
-
-        fits_match = re.search(r"-O '([^']+\.fits)'", fits_line)
-        if not fits_match:
-            continue
-        fits_filename = fits_match.group(1)
-        fits_filepath = os.path.join(LOCAL_WASP_DIR, fits_filename)
-        wasp_id = fits_filename.replace('.fits', '')
-
-        tbl_filename = None
-        if tbl_line:
-            tbl_match = re.search(r"-O '([^']+)'", tbl_line)
-            if tbl_match:
-                tbl_filename = tbl_match.group(1)
-
-        # Fast in-memory skip check
-        if wasp_id in processed_stars:
-            continue
-
-        fits_processed_count += 1
-
-        try:
-            print(f"  -> Downloading and processing {wasp_id} ({fits_processed_count}/{limit or 'all'})...")
-            subprocess.run(fits_line, shell=True, check=True, cwd=LOCAL_WASP_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if tbl_line:
-                subprocess.run(tbl_line, shell=True, check=True, cwd=LOCAL_WASP_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-            result = process_local_wasp_star((fits_filepath, SDE_THRESHOLD))
-            if result:
-                candidate_data, processed_lc, bls_model = result
-
-                # Save candidate data
-                candidate_df = pd.DataFrame([candidate_data])
-                file_exists = os.path.isfile(CANDIDATES_CSV)
-                candidate_df.to_csv(CANDIDATES_CSV, mode='a', header=not file_exists, index=False)
-                print(f"  -> Found candidate in {wasp_id} (SDE={candidate_data['sde']:.2f})")
-
-                # Save plots
-                utils.save_plots(PLOTS_SUBDIR, candidate_data, processed_lc, bls_model)
-
-            # Record star as processed (both in memory and persistent log)
-            processed_stars.add(wasp_id)
-            with open(PROCESSED_STARS_FILE, 'a') as pf:
-                pf.write(f"{wasp_id}\n")
-
-        except subprocess.CalledProcessError as e:
-            print(f"  !!! Download failed for {wasp_id}: {e} !!!")
-        except KeyboardInterrupt:
-            print("\nProcess interrupted by user. Cleaning up and exiting.")
-            raise
-        except Exception as e:
-            print(f"  !!! Processing failed for {wasp_id}: {e} !!!")
-        finally:
-            if os.path.exists(fits_filepath):
-                os.remove(fits_filepath)
-            if tbl_filename:
-                tbl_filepath = os.path.join(LOCAL_WASP_DIR, tbl_filename)
-                if os.path.exists(tbl_filepath):
-                    os.remove(tbl_filepath)
-
-    return not reached_limit
+    try:
+        subprocess.run(['ionice', '-c', '3', '-p', str(os.getpid())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 def process_local_wasp_star(args):
     """
@@ -167,32 +97,150 @@ def process_local_wasp_star(args):
         print(f"  !!! Error processing {wasp_id}: {e} !!!")
         return None
 
-def apply_system_protections():
+def process_single_star_worker(task):
     """
-    Guarantees Technitium DNS and Jellyfin run with zero performance impact:
-    1. Sets CPU nice level to 19 (lowest CPU priority).
-    2. Pins WASP process to cores 8-31 (reserving cores 0-7 exclusively for DNS/Jellyfin/OS).
-    3. Sets disk I/O scheduling to Idle priority (ionice class 3).
+    Worker function to download and analyze a single star.
+    Runs inside the parallel worker pool with system protections active.
     """
-    try:
-        os.nice(19)
-    except Exception:
-        pass
+    fits_line, tbl_line, wasp_id, fits_filename, tbl_filename, sde_threshold = task
+    fits_filepath = os.path.join(LOCAL_WASP_DIR, fits_filename)
+    tbl_filepath = os.path.join(LOCAL_WASP_DIR, tbl_filename) if tbl_filename else None
+
+    candidate_result = None
+    err_msg = None
 
     try:
-        total_cores = os.cpu_count() or 32
-        if total_cores > 8:
-            safe_cores = set(range(8, total_cores))
-            os.sched_setaffinity(0, safe_cores)
-            print(f"🛡️  Resource Protection: Pinned to CPU cores 8-{total_cores-1} (cores 0-7 reserved for DNS & Jellyfin)")
-    except Exception:
-        pass
+        subprocess.run(fits_line, shell=True, check=True, cwd=LOCAL_WASP_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if tbl_line:
+            subprocess.run(tbl_line, shell=True, check=True, cwd=LOCAL_WASP_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        candidate_result = process_local_wasp_star((fits_filepath, sde_threshold))
+    except Exception as e:
+        err_msg = str(e)
+    finally:
+        if os.path.exists(fits_filepath):
+            try:
+                os.remove(fits_filepath)
+            except Exception:
+                pass
+        if tbl_filepath and os.path.exists(tbl_filepath):
+            try:
+                os.remove(tbl_filepath)
+            except Exception:
+                pass
+
+    return (wasp_id, candidate_result, err_msg)
+
+def process_wget_script(wget_script_path, processed_stars=None, limit=None, num_workers=NUM_WORKERS):
+    """
+    Downloads and processes data from a wget script using parallel CPU workers.
+    Uses a sliding window queue to keep disk and memory footprints minimal.
+    """
+    script_name = os.path.basename(wget_script_path)
+    print(f"\n--- Processing wget script: {script_name} ---")
+    os.makedirs(LOCAL_WASP_DIR, exist_ok=True)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    if processed_stars is None:
+        processed_stars = set()
+
+    with open(wget_script_path, 'r') as f:
+        lines = f.readlines()
+
+    # Parse all star tasks from the script
+    tasks = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        i += 1
+        if not line.startswith('wget') or '.fits' not in line:
+            continue
+
+        fits_line = line
+        tbl_line = None
+        if i < len(lines) and 'wget' in lines[i] and '_lc.tbl' in lines[i]:
+            tbl_line = lines[i].strip()
+            i += 1
+
+        fits_match = re.search(r"-O '([^']+\.fits)'", fits_line)
+        if not fits_match:
+            continue
+        fits_filename = fits_match.group(1)
+        wasp_id = fits_filename.replace('.fits', '')
+
+        tbl_filename = None
+        if tbl_line:
+            tbl_match = re.search(r"-O '([^']+)'", tbl_line)
+            if tbl_match:
+                tbl_filename = tbl_match.group(1)
+
+        if wasp_id in processed_stars:
+            continue
+
+        tasks.append((fits_line, tbl_line, wasp_id, fits_filename, tbl_filename, SDE_THRESHOLD))
+
+    if not tasks:
+        print(f"All stars in {script_name} already processed.")
+        return True
+
+    if limit is not None:
+        tasks = tasks[:limit]
+
+    print(f"  -> {len(tasks)} unprocessed stars in {script_name}. Processing with {num_workers} parallel workers on cores 8-31...")
+
+    fits_processed_count = 0
+    max_queue = num_workers * 2
 
     try:
-        subprocess.run(['ionice', '-c', '3', '-p', str(os.getpid())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("🛡️  I/O Protection: Disk priority set to Idle (Zero delay for media streaming)")
-    except Exception:
-        pass
+        with ProcessPoolExecutor(max_workers=num_workers, initializer=apply_system_protections) as executor:
+            futures = {}
+            task_iter = iter(tasks)
+
+            # Prime the queue
+            for star_task in itertools.islice(task_iter, max_queue):
+                fut = executor.submit(process_single_star_worker, star_task)
+                futures[fut] = star_task[2]
+
+            while futures:
+                done, _ = concurrent.futures.wait(futures.keys(), return_when=concurrent.futures.FIRST_COMPLETED)
+                for fut in done:
+                    wasp_id = futures.pop(fut)
+                    fits_processed_count += 1
+                    try:
+                        wid, cand_result, err = fut.result()
+                        if err:
+                            print(f"  !!! Download/analysis failed for {wid}: {err} !!!")
+                        elif cand_result:
+                            candidate_data, processed_lc, bls_model = cand_result
+                            candidate_df = pd.DataFrame([candidate_data])
+                            file_exists = os.path.isfile(CANDIDATES_CSV)
+                            candidate_df.to_csv(CANDIDATES_CSV, mode='a', header=not file_exists, index=False)
+                            print(f"  >>> FOUND CANDIDATE in {wid} with SDE={candidate_data['sde']:.2f}! ({fits_processed_count}/{len(tasks)}) <<<")
+                            utils.save_plots(PLOTS_SUBDIR, candidate_data, processed_lc, bls_model)
+                        else:
+                            if fits_processed_count % 5 == 0 or fits_processed_count == len(tasks):
+                                print(f"  -> Processed {wid} ({fits_processed_count}/{len(tasks)})...")
+
+                        processed_stars.add(wid)
+                        with open(PROCESSED_STARS_FILE, 'a') as pf:
+                            pf.write(f"{wid}\n")
+
+                    except Exception as ex:
+                        print(f"  !!! Error on {wasp_id}: {ex} !!!")
+
+                    # Submit next star
+                    try:
+                        next_task = next(task_iter)
+                        next_fut = executor.submit(process_single_star_worker, next_task)
+                        futures[next_fut] = next_task[2]
+                    except StopIteration:
+                        pass
+
+    except KeyboardInterrupt:
+        print("\n\nProcess interrupted by user. Cleaning up and exiting.")
+        raise
+
+    return limit is None
 
 def process_all_wget_scripts(script_limit=None, file_limit=None):
     apply_system_protections()
