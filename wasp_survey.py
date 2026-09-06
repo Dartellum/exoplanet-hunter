@@ -27,7 +27,7 @@ CANDIDATES_CSV = os.path.join(RESULTS_DIR, "candidates.csv")
 COMPLETED_TILES_FILE = os.path.join(RESULTS_DIR, "completed_tiles.txt")
 PROCESSED_STARS_FILE = os.path.join(RESULTS_DIR, "processed_stars.log")
 LOCAL_WASP_DIR = "SuperWASP_data"
-SDE_THRESHOLD = 8.0
+SDE_THRESHOLD = 10.0
 NUM_WORKERS = 8
 WGET_SCRIPTS_DIR = "/home/wes/scripts/astronomy/SuperWASP_wget"
 
@@ -63,35 +63,58 @@ def apply_system_protections():
 def process_local_wasp_star(args):
     """
     Worker function to process a single WASP star from a local FITS file.
+    Filters faint sky noise, uses SysRem detrended flux, and runs BLS with diurnal masking.
     """
     file_path, sde_threshold = args
     wasp_id = os.path.basename(file_path).replace('.fits','')
 
     try:
         with fits.open(file_path) as hdul:
+            # Skip extremely faint background stars (V > 16.5) dominated by detector noise
+            mag = hdul[0].header.get('WASP_MAG')
+            if mag is not None and mag > 16.5:
+                return None
+
             data = hdul[1].data
+            if len(data) < 500:
+                return None
 
             # SuperWASP reference time is in the header, in JD.
             jd_ref = hdul[0].header['JD_REF']
-
-            # Time for each observation is in the 'TMID' column, in seconds from JD_REF.
             time_seconds = data['TMID']
-
-            # Convert seconds to days and add to the reference Julian Date.
             time_jd = jd_ref + (time_seconds / 86400.0)
 
-            # Extract flux and normalize
-            flux = data['FLUX2']
-            normalized_flux = flux / np.median(flux)
+            # Use SysRem-detrended flux (TAMFLUX2) if valid, fallback to FLUX2
+            flux = None
+            if 'TAMFLUX2' in data.columns.names:
+                tam = data['TAMFLUX2']
+                if np.nanmedian(tam) > 0.1:
+                    flux = tam
+            if flux is None:
+                flux = data['FLUX2']
+
+            # Filter non-positive fluxes or NaNs
+            valid_mask = np.isfinite(flux) & (flux > 0)
+            if np.sum(valid_mask) < 500:
+                return None
+
+            time_clean = time_jd[valid_mask]
+            flux_clean = flux[valid_mask]
+
+            median_flux = np.median(flux_clean)
+            if median_flux <= 0.05:
+                return None
+
+            normalized_flux = flux_clean / median_flux
 
             # Create LightCurve object using the JD numpy array.
-            lc = lk.LightCurve(time=time_jd, flux=normalized_flux)
+            lc = lk.LightCurve(time=time_clean, flux=normalized_flux)
 
-        if len(lc) == 0:
+        if len(lc) < 500:
             return None
 
         numeric_id_placeholder = int(''.join(filter(str.isdigit, wasp_id)))
-        return utils.run_bls_analysis(lc, numeric_id_placeholder, wasp_id, sde_threshold)
+        return utils.run_bls_analysis(lc, numeric_id_placeholder, wasp_id, sde_threshold, mask_diurnal=True)
 
     except Exception as e:
         print(f"  !!! Error processing {wasp_id}: {e} !!!")
@@ -219,12 +242,18 @@ def process_wget_script(wget_script_path, processed_stars=None, limit=None, num_
                             candidate_df = pd.DataFrame([candidate_data])
                             file_exists = os.path.isfile(CANDIDATES_CSV)
                             candidate_df.to_csv(CANDIDATES_CSV, mode='a', header=not file_exists, index=False)
+                            c_type = candidate_data.get('candidate_type', 'Candidate')
+                            is_planet = (c_type == 'Exoplanet')
+                            badge = "\033[1;42;30m 🪐 EXOPLANET CANDIDATE DETECTED! 🌟 \033[0m" if is_planet else "\033[1;44;37m 👥 ECLIPSING BINARY CANDIDATE DETECTED! 🌟 \033[0m"
+                            depth_pct = candidate_data['depth_ppm'] / 10000.0
+
                             print("\n" + "=" * 78)
-                            print(f"\033[1;42;30m 🌟 EXOPLANET / BINARY CANDIDATE DETECTED! 🌟 \033[0m")
-                            print(f"\033[1;33m  -> Star:   {wid} ({fits_processed_count}/{len(tasks)})\033[0m")
-                            print(f"\033[1;32m  -> SDE:    {candidate_data['sde']:.2f} (Signal Detection Efficiency)\033[0m")
-                            print(f"\033[1;36m  -> Period: {candidate_data['period_days']:.5f} days | Epoch: {candidate_data['t0_bjd']:.4f} BJD\033[0m")
-                            print(f"\033[1;35m  -> Depth:  {candidate_data['depth_ppm']:.0f} ppm\033[0m")
+                            print(f" {badge}")
+                            print(f"\033[1;33m  -> Star:        {wid} ({fits_processed_count}/{len(tasks)})\033[0m")
+                            print(f"\033[1;32m  -> SDE:         {candidate_data['sde']:.2f} (Signal Detection Efficiency)\033[0m")
+                            print(f"\033[1;36m  -> Period:      {candidate_data['period_days']:.5f} days | Epoch: {candidate_data['t0_bjd']:.4f} BJD\033[0m")
+                            print(f"\033[1;35m  -> Depth:       {candidate_data['depth_ppm']:.0f} ppm ({depth_pct:.2f}%)\033[0m")
+                            print(f"\033[1;37m  -> Transits:    {candidate_data.get('n_transits', '?')} distinct epochs ({candidate_data.get('n_in_transit', '?')} points in transit)\033[0m")
                             print("=" * 78 + "\n")
                         else:
                             if fits_processed_count % 5 == 0 or fits_processed_count == len(tasks):

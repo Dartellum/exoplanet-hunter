@@ -45,6 +45,7 @@ processed_log.txt
 scripts_backup*/
 folder.txt
 results_*.txt
+*candidates_unfiltered*.csv
 
 # Local Agent / AI Memory (keep private, do not push to GitHub)
 AGENTS.md
