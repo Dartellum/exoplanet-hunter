@@ -39,7 +39,13 @@ def run_bls_analysis(light_curve, object_id, display_name, sde_threshold):
     sde_val = float(bls_model.power[index].value)
 
     if sde_val >= sde_threshold:
-        print(f"  >>> FOUND CANDIDATE in {display_name} with SDE={sde_val:.2f}! <<<")
+        print("\n" + "=" * 78)
+        print(f"\033[1;42;30m 🌟 EXOPLANET / BINARY CANDIDATE DETECTED! 🌟 \033[0m")
+        print(f"\033[1;33m  -> Star:   {display_name}\033[0m")
+        print(f"\033[1;32m  -> SDE:    {sde_val:.2f} (Signal Detection Efficiency)\033[0m")
+        print(f"\033[1;36m  -> Period: {planet_period_val:.5f} days | Epoch: {planet_t0_val:.4f} BJD\033[0m")
+        print(f"\033[1;35m  -> Depth:  {planet_depth_val * 1e6:.0f} ppm\033[0m")
+        print("=" * 78 + "\n")
         candidate_data = {
             "tic_id": object_id,
             "obj_name": display_name,

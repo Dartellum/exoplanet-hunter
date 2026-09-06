@@ -215,7 +215,13 @@ def process_wget_script(wget_script_path, processed_stars=None, limit=None, num_
                             candidate_df = pd.DataFrame([candidate_data])
                             file_exists = os.path.isfile(CANDIDATES_CSV)
                             candidate_df.to_csv(CANDIDATES_CSV, mode='a', header=not file_exists, index=False)
-                            print(f"  >>> FOUND CANDIDATE in {wid} with SDE={candidate_data['sde']:.2f}! ({fits_processed_count}/{len(tasks)}) <<<")
+                            print("\n" + "=" * 78)
+                            print(f"\033[1;42;30m 🌟 EXOPLANET / BINARY CANDIDATE DETECTED! 🌟 \033[0m")
+                            print(f"\033[1;33m  -> Star:   {wid} ({fits_processed_count}/{len(tasks)})\033[0m")
+                            print(f"\033[1;32m  -> SDE:    {candidate_data['sde']:.2f} (Signal Detection Efficiency)\033[0m")
+                            print(f"\033[1;36m  -> Period: {candidate_data['period_days']:.5f} days | Epoch: {candidate_data['t0_bjd']:.4f} BJD\033[0m")
+                            print(f"\033[1;35m  -> Depth:  {candidate_data['depth_ppm']:.0f} ppm\033[0m")
+                            print("=" * 78 + "\n")
                             utils.save_plots(PLOTS_SUBDIR, candidate_data, processed_lc, bls_model)
                         else:
                             if fits_processed_count % 5 == 0 or fits_processed_count == len(tasks):
