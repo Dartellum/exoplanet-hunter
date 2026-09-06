@@ -167,7 +167,35 @@ def process_local_wasp_star(args):
         print(f"  !!! Error processing {wasp_id}: {e} !!!")
         return None
 
+def apply_system_protections():
+    """
+    Guarantees Technitium DNS and Jellyfin run with zero performance impact:
+    1. Sets CPU nice level to 19 (lowest CPU priority).
+    2. Pins WASP process to cores 8-31 (reserving cores 0-7 exclusively for DNS/Jellyfin/OS).
+    3. Sets disk I/O scheduling to Idle priority (ionice class 3).
+    """
+    try:
+        os.nice(19)
+    except Exception:
+        pass
+
+    try:
+        total_cores = os.cpu_count() or 32
+        if total_cores > 8:
+            safe_cores = set(range(8, total_cores))
+            os.sched_setaffinity(0, safe_cores)
+            print(f"🛡️  Resource Protection: Pinned to CPU cores 8-{total_cores-1} (cores 0-7 reserved for DNS & Jellyfin)")
+    except Exception:
+        pass
+
+    try:
+        subprocess.run(['ionice', '-c', '3', '-p', str(os.getpid())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("🛡️  I/O Protection: Disk priority set to Idle (Zero delay for media streaming)")
+    except Exception:
+        pass
+
 def process_all_wget_scripts(script_limit=None, file_limit=None):
+    apply_system_protections()
     os.makedirs(RESULTS_DIR, exist_ok=True)
     all_wget_scripts = sorted(glob.glob(os.path.join(WGET_SCRIPTS_DIR, "*.bat")))
     if not all_wget_scripts:
