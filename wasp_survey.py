@@ -114,7 +114,11 @@ def process_single_star_worker(task):
         if tbl_line:
             subprocess.run(tbl_line, shell=True, check=True, cwd=LOCAL_WASP_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        candidate_result = process_local_wasp_star((fits_filepath, sde_threshold))
+        result = process_local_wasp_star((fits_filepath, sde_threshold))
+        if result:
+            candidate_data, processed_lc, bls_model = result
+            utils.save_plots(PLOTS_SUBDIR, candidate_data, processed_lc, bls_model)
+            candidate_result = candidate_data
     except Exception as e:
         err_msg = str(e)
     finally:
@@ -211,7 +215,7 @@ def process_wget_script(wget_script_path, processed_stars=None, limit=None, num_
                         if err:
                             print(f"  !!! Download/analysis failed for {wid}: {err} !!!")
                         elif cand_result:
-                            candidate_data, processed_lc, bls_model = cand_result
+                            candidate_data = cand_result
                             candidate_df = pd.DataFrame([candidate_data])
                             file_exists = os.path.isfile(CANDIDATES_CSV)
                             candidate_df.to_csv(CANDIDATES_CSV, mode='a', header=not file_exists, index=False)
@@ -222,7 +226,6 @@ def process_wget_script(wget_script_path, processed_stars=None, limit=None, num_
                             print(f"\033[1;36m  -> Period: {candidate_data['period_days']:.5f} days | Epoch: {candidate_data['t0_bjd']:.4f} BJD\033[0m")
                             print(f"\033[1;35m  -> Depth:  {candidate_data['depth_ppm']:.0f} ppm\033[0m")
                             print("=" * 78 + "\n")
-                            utils.save_plots(PLOTS_SUBDIR, candidate_data, processed_lc, bls_model)
                         else:
                             if fits_processed_count % 5 == 0 or fits_processed_count == len(tasks):
                                 print(f"  -> Processed {wid} ({fits_processed_count}/{len(tasks)})...")
