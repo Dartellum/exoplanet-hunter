@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import lightkurve as lk
 import astropy.units as u
 from astropy.coordinates import SkyCoord, get_constellation
+from astroquery.mast import Catalogs
 
 # --- Configuration ---
 BINARY_LIST_FILE = "binary_candidates_list.txt"
@@ -78,9 +79,9 @@ def classify_binary(period_days, pri_depth, sec_depth, ooe_var):
         return "EA"
 
 def process_all_binaries():
-    print("=" * 70)
-    print("🔭 AAVSO VSX ECLIPSING BINARY CHARACTERIZATION PIPELINE 🔭")
-    print("=" * 70)
+    print("=" * 75)
+    print("🔭 AAVSO VSX ECLIPSING BINARY CHARACTERIZATION PIPELINE (SNY V01-V33) 🔭")
+    print("=" * 75)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR, exist_ok=True)
@@ -93,9 +94,27 @@ def process_all_binaries():
     with open(BINARY_LIST_FILE, 'r') as f:
         target_ids = [int(line.strip()) for line in f if line.strip().isdigit()]
 
-    print(f"Loaded {len(target_ids)} binary candidate TIC IDs to process.")
+    print(f"Loaded {len(target_ids)} binary candidate TIC IDs.")
 
-    # 2. Load prior candidates table for initial BLS period and t0 estimates
+    # 2. Batch query MAST TIC for 2MASS and Gaia cross-identifications
+    print("📡 Querying MAST TIC for official 2MASS and Gaia DR2 cross-identifications...")
+    cross_id_map = {}
+    try:
+        res = Catalogs.query_criteria(catalog='Tic', ID=target_ids)
+        tdf = res.to_pandas()
+        for _, r in tdf.iterrows():
+            cid = int(r['ID'])
+            twomass = str(r['TWOMASS']).strip() if pd.notna(r['TWOMASS']) else ""
+            gaia = str(r['GAIA']).strip() if pd.notna(r['GAIA']) else ""
+            cross_id_map[cid] = {
+                'twomass': f"2MASS J{twomass}" if twomass else "",
+                'gaia': f"Gaia DR2 {gaia}" if gaia else ""
+            }
+        print(f"✅ Successfully retrieved cross-identifications for {len(cross_id_map)} stars.")
+    except Exception as e:
+        print(f"⚠️ Could not batch query MAST for cross-IDs: {e}")
+
+    # 3. Load prior candidates table for initial BLS period and t0 estimates
     candidates_info = {}
     if os.path.isfile(CANDIDATES_CSV):
         df_cand = pd.read_csv(CANDIDATES_CSV)
@@ -111,7 +130,8 @@ def process_all_binaries():
     submission_rows = []
 
     for idx, tic_id in enumerate(target_ids, 1):
-        print(f"\n[{idx}/{len(target_ids)}] Processing TIC {tic_id}...")
+        sny_id = f"SNY V{idx:02d}"
+        print(f"\n[{idx}/{len(target_ids)}] Processing {sny_id} (TIC {tic_id})...")
 
         # A. Download TESS Light Curve
         try:
@@ -159,7 +179,6 @@ def process_all_binaries():
             pri_d2, pri_ph2, sec_d2, sec_ph2, ooe2 = analyze_eclipses(bp2, bf2)
 
             # Decide whether true orbital period is P or 2P
-            # If 2P shows two clear, distinct dips at 0.0 and ~0.5 with noticeable depth difference or ellipsoidal variation:
             if (sec_d2 > 0.002 and abs(pri_d2 - sec_d2) > 0.001) or (init_p < 0.6 and pri_d2 > 0.01):
                 orbital_period = 2 * init_p
                 best_t0 = init_t0 + pri_ph2 * orbital_period
@@ -175,14 +194,11 @@ def process_all_binaries():
             epoch_bjd = 2457000.0 + best_t0
 
             # C. Magnitude calculations
-            # Max magnitude = Tmag
-            # Primary eclipse min magnitude:
             mag_max = tmag
             flux_drop_pri = min(0.999, max(0.0001, pri_depth))
             delta_mag_pri = -2.5 * np.log10(1.0 - flux_drop_pri)
             mag_min_pri = mag_max + delta_mag_pri
 
-            # Secondary eclipse depth in mag
             if sec_depth > 0.0005:
                 flux_drop_sec = min(0.999, sec_depth)
                 delta_mag_sec = -2.5 * np.log10(1.0 - flux_drop_sec)
@@ -194,11 +210,18 @@ def process_all_binaries():
             # D. Classify variability
             var_type = classify_binary(orbital_period, pri_depth, sec_depth, ooe_var)
 
-            # E. Generate Phase-Folded Plot for AAVSO VSX
-            # Plot from phase -0.2 to 1.2 to display 1.4 full cycles
+            # E. Cross-identifications
+            x_twomass = cross_id_map.get(tic_id, {}).get('twomass', '')
+            x_gaia = cross_id_map.get(tic_id, {}).get('gaia', '')
+            other_names = f"TIC {tic_id}"
+            if x_twomass:
+                other_names += f", {x_twomass}"
+            if x_gaia:
+                other_names += f", {x_gaia}"
+
+            # F. Generate Phase-Folded Plot for AAVSO VSX
             fig, ax = plt.subplots(figsize=(11, 6))
 
-            # Duplicate phase points across phase -0.2 to 1.2
             plot_phases = []
             plot_fluxes = []
             for shift in [-1.0, 0.0, 1.0]:
@@ -232,30 +255,36 @@ def process_all_binaries():
             if sec_depth > 0.001:
                 ax.axvline(0.5, color='green', linestyle=':', alpha=0.7, label='Secondary Eclipse (Phase 0.5)')
 
-            # Annotations and Titles
-            ax.set_title(f"TIC {tic_id} | VSX Type: {var_type} | P = {orbital_period:.6f} d | BJD_0 = {epoch_bjd:.4f}",
+            # Annotations and Titles with SNY designation
+            plot_file_name = f"{sny_id.replace(' ', '_')}_vsx_phase.png"
+            ax.set_title(f"{sny_id} (TIC {tic_id}) | VSX Type: {var_type} | P = {orbital_period:.6f} d | BJD_0 = {epoch_bjd:.4f}",
                          fontsize=12, fontweight='bold', pad=12)
             ax.set_xlabel("Orbital Phase (Phase 0 = Primary Minimum)", fontsize=11)
             ax.set_ylabel("Normalized Flux (TESS Passband)", fontsize=11)
             ax.set_xlim(-0.2, 1.2)
 
-            subtitle = (f"Constellation: {constellation} | RA (J2000): {ra_hms} | Dec (J2000): {dec_dms}\n"
+            subtitle = (f"Discoverer: Dr. Walter Wesley Snyder V (Dartellum) | Constellation: {constellation}\n"
+                        f"RA (J2000): {ra_hms} | Dec (J2000): {dec_dms} | Cross-IDs: {other_names}\n"
                         f"Tmag: {mag_max:.2f} ({mag_max:.2f} - {mag_min_pri:.2f} T) | Pri Depth: {pri_depth*1e6:.0f} ppm "
                         f"({delta_mag_pri:.3f} mag) | Sec Depth: {sec_depth*1e6:.0f} ppm ({delta_mag_sec:.3f} mag)")
-            ax.text(0.5, -0.15, subtitle, transform=ax.transAxes, ha='center', fontsize=9.5,
+            ax.text(0.5, -0.16, subtitle, transform=ax.transAxes, ha='center', fontsize=9.2,
                     bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='lightgray'))
 
             ax.grid(True, linestyle=':', alpha=0.6)
             ax.legend(loc='lower right', framealpha=0.9)
             plt.tight_layout()
 
-            plot_path = os.path.join(PLOTS_DIR, f"TIC_{tic_id}_vsx_phase.png")
+            plot_path = os.path.join(PLOTS_DIR, plot_file_name)
             fig.savefig(plot_path, dpi=180)
             plt.close(fig)
 
             # Record row
             submission_rows.append({
-                "Name": f"TIC {tic_id}",
+                "Name": sny_id,
+                "TIC_ID": f"TIC {tic_id}",
+                "TwoMASS_ID": x_twomass,
+                "Gaia_DR2_ID": x_gaia,
+                "Other_Names": other_names,
                 "Constellation": constellation,
                 "RA_J2000": ra_hms,
                 "Dec_J2000": dec_dms,
@@ -273,10 +302,11 @@ def process_all_binaries():
                 "Passband": "T",
                 "Discovery_Source": "TESS All-Sky Exoplanet Survey Pipeline",
                 "Discoverer": "Dr. Walter Wesley Snyder V (Dartellum)",
-                "Plot_File": os.path.basename(plot_path)
+                "Plot_File": plot_file_name
             })
 
-            print(f"  -> Constellation: {constellation} | VarType: {var_type}")
+            print(f"  -> Assigned: {sny_id} | Constellation: {constellation} | VarType: {var_type}")
+            print(f"  -> Cross-IDs: {other_names}")
             print(f"  -> Period: {orbital_period:.5f} d | BJD_0: {epoch_bjd:.4f}")
             print(f"  -> Range: {mag_max:.2f} to {mag_min_pri:.2f} T (Pri: {pri_depth*1e6:.0f} ppm, Sec: {sec_depth*1e6:.0f} ppm)")
             print(f"  -> Saved phase plot: {plot_path}")
@@ -284,14 +314,14 @@ def process_all_binaries():
         except Exception as e:
             print(f"  ❌ Error processing TIC {tic_id}: {e}")
 
-    # 3. Export CSV
+    # 4. Export CSV
     submission_df = pd.DataFrame(submission_rows)
     submission_df.to_csv(OUTPUT_CSV, index=False)
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 75)
     print(f"🎉 SUCCESS! Processed {len(submission_rows)} / {len(target_ids)} binary systems.")
     print(f"📄 Submission CSV saved to: {OUTPUT_CSV}")
     print(f"🖼️ Phased plots saved to:   {PLOTS_DIR}/")
-    print("=" * 70)
+    print("=" * 75)
 
 if __name__ == '__main__':
     process_all_binaries()
